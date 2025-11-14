@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package test;
+
+option cc_generic_services = true;
+
+message ResultCode {
+    int32 errcode = 1;
+    bytes errmsg = 2;
+}
+
+message LoginRequest {
+    bytes name = 1;
+    bytes password = 2;
+}
+
+message LoginResponse {
+    ResultCode result = 1;
+    bool success = 2;
+}
+
+message GetFriendLsitRequest {
+    uint32 userid = 1;
+}
+
+message User {
+    bytes name = 1;
+    uint32 age = 2;
+    enum Gender {
+        male = 0;
+        female = 1;
+    }
+    Gender gender = 3;
+}
+
+message GetFriendLsitResponse {
+    ResultCode result = 1;
+    repeated User friend_list = 2;
+}
+
+service UserService {
+    rpc Login (LoginRequest) returns (LoginResponse);
+    rpc GetFriendLsit (GetFriendLsitRequest) returns (GetFriendLsitResponse);
+}
