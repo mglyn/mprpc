@@ -54,7 +54,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
         return;
     }
 
-    struct sockaddr_in server_addr;
+    //struct sockaddr_in server_addr;
     //std::string ip = MprpcApplication::GetConfig().Load("rpcserverip");
     //uint32_t port = std::stoi(MprpcApplication::GetConfig().Load("rpcserverport"));
 
