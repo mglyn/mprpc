@@ -4,6 +4,7 @@
 #include <muduo/net/EventLoop.h> 
 #include <muduo/net/TcpServer.h> 
 #include <muduo/net/InetAddress.h> 
+#include <mutex>
 #include <map>
 #include <string>
 
@@ -27,4 +28,16 @@ private:
 
     std::map<std::string, ServiceInfo> m_serviceMap; // 存储注册的服务
     std::map<muduo::net::TcpConnectionPtr, std::string> m_connectionBufferMap; // 存储每个连接的缓冲区
+
+        // 连接保护: per-connection info
+        struct ConnectionInfo {
+            std::string buffer;
+            time_t lastActive = 0;
+            size_t totalReceived = 0;
+        };
+
+        std::map<muduo::net::TcpConnectionPtr, ConnectionInfo> m_connectionInfoMap;
+        std::mutex m_connInfoMutex;
+
+        void CheckIdleConnections();
 };

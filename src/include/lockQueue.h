@@ -5,8 +5,6 @@
 #include <condition_variable>
 #include <thread>
 
-// 异步IO消息队列
-
 template <typename T>
 class LockQueue {
 public:

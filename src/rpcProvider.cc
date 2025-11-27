@@ -7,7 +7,6 @@
 #include "zookeeperutil.h"
 
 void RpcProvider::NotifyService(::google::protobuf::Service* service){
-    // 你原来的代码，完全不变
     const google::protobuf::ServiceDescriptor* pServiceDesc = service->GetDescriptor();
     const std::string service_name = pServiceDesc->name();
     int methodCnt = pServiceDesc->method_count();
@@ -27,7 +26,6 @@ void RpcProvider::NotifyService(::google::protobuf::Service* service){
 }
 
 void RpcProvider::Run(){
-    // 你原来的代码，完全不变
     std::string ip = MprpcApplication::GetConfig().Load("rpcserverip");
     uint32_t port = std::stoi(MprpcApplication::GetConfig().Load("rpcserverport"));
     muduo::net::InetAddress addr(ip, port);
@@ -37,7 +35,10 @@ void RpcProvider::Run(){
     server.setConnectionCallback(std::bind(&RpcProvider::OnConnection, this, std::placeholders::_1));
     server.setMessageCallback(std::bind(&RpcProvider::OnMessage, this ,std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-    server.setThreadNum(4);
+        server.setThreadNum(4);
+
+        // 每 5 秒检查一次连接超时 / 半包情况
+        m_eventLoop.runEvery(5.0, std::bind(&RpcProvider::CheckIdleConnections, this));
 
     ZkClient zkCli;
     zkCli.Start();
@@ -60,13 +61,19 @@ void RpcProvider::Run(){
 }
 
 void RpcProvider::OnConnection(const muduo::net::TcpConnectionPtr& conn){
-    // 你原来的代码，完全不变
     if(!conn->connected()){
-        m_connectionBufferMap.erase(conn);
+            {
+                std::lock_guard<std::mutex> lg(m_connInfoMutex);
+                m_connectionInfoMap.erase(conn);
+            }
+            m_connectionBufferMap.erase(conn);
         conn->shutdown();
     }
     else{
         conn->setTcpNoDelay(true);
+            // 初始化连接 info
+            std::lock_guard<std::mutex> lg(m_connInfoMutex);
+            m_connectionInfoMap[conn].lastActive = ::time(nullptr);
     }
 }
 
@@ -88,6 +95,20 @@ void RpcProvider::OnMessage(const muduo::net::TcpConnectionPtr& conn,
         // 第二步：解析 header_size
         uint32_t header_size = 0;
         memcpy(&header_size, conn_buf.data(), 4);
+
+    // 立即检查单连接缓冲区上限
+    const size_t MAX_CONN_BUF = 10 * 1024 * 1024; // 10MB
+    {
+        std::lock_guard<std::mutex> lg(m_connInfoMutex);
+        auto it = m_connectionInfoMap.find(conn);
+        if (it != m_connectionInfoMap.end() && it->second.buffer.size() > MAX_CONN_BUF) {
+            std::cout << "Conn buffer too large, closing. size=" << it->second.buffer.size() << std::endl;
+            conn->shutdown();
+            m_connectionInfoMap.erase(it);
+            m_connectionBufferMap.erase(conn);
+            return;
+        }
+    }
 
         // 安全校验（针对 header_size，避免非法值）
         if (header_size > 1024 * 1024) { // 限制 header 最大1MB
@@ -116,19 +137,16 @@ void RpcProvider::OnMessage(const muduo::net::TcpConnectionPtr& conn,
         // 第五步：判断是否有足够的完整数据（4+header_size+args_size）
         uint32_t total_needed_len = 4 + header_size + args_size;
         if (conn_buf.size() < total_needed_len) {
-            break; // 完整包数据不够，等后续
+            break; 
         }
 
-        // 第六步：截取完整包，从缓存中剥离（避免重复处理）
         std::string complete_pkg = conn_buf.substr(0, total_needed_len);
         conn_buf.erase(0, total_needed_len);
 
-        // 第七步：调用你原来的解析逻辑（完全不变）
         ParseCompleteRpcPackage(complete_pkg, conn);
     }
 }
 
-// 你原来的 ParseCompleteRpcPackage 函数，完全不变！
 void RpcProvider::ParseCompleteRpcPackage(const std::string& complete_pkg, const muduo::net::TcpConnectionPtr& conn) {
     uint32_t header_size = 0;
     complete_pkg.copy((char*)&header_size, 4, 0);
@@ -192,4 +210,33 @@ void RpcProvider::ParseCompleteRpcPackage(const std::string& complete_pkg, const
     service->CallMethod(pMethodDesc, nullptr, request, response, done);
 
     delete request;
+}
+
+void RpcProvider::CheckIdleConnections() {
+    const int IDLE_TIMEOUT_SECONDS = 10; // 半包超时阈值
+    std::vector<muduo::net::TcpConnectionPtr> toClose;
+    time_t now = ::time(nullptr);
+
+    {
+        std::lock_guard<std::mutex> lg(m_connInfoMutex);
+        for (auto it = m_connectionInfoMap.begin(); it != m_connectionInfoMap.end(); ++it) {
+            auto conn = it->first;
+            const auto &info = it->second;
+            if (!conn->connected()) {
+                toClose.push_back(conn);
+                continue;
+            }
+            if (!info.buffer.empty() && (now - info.lastActive) > IDLE_TIMEOUT_SECONDS) {
+                std::cout << "Closing idle half-package connection" << std::endl;
+                toClose.push_back(conn);
+            }
+        }
+    }
+
+    for (auto &c : toClose) {
+        c->shutdown();
+        std::lock_guard<std::mutex> lg(m_connInfoMutex);
+        m_connectionInfoMap.erase(c);
+        m_connectionBufferMap.erase(c);
+    }
 }

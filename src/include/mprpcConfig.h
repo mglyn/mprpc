@@ -1,6 +1,5 @@
 #pragma once
 
-//配置文件为键值对，且不需要排序，所以使用无序哈希
 #include<map>
 #include<string>
 //配置文件为：rpcserverip,rpcserverport,zookeeperip,zookeeperport
